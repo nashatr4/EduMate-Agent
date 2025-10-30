@@ -2,7 +2,7 @@
 
 module.exports = {
   // Memberitahu Jest untuk menjalankan file setup ini SEBELUM tes
-  setupFiles: ['<rootDir>/tests/setup.js'],
+  setupFiles: [],
   
   // Mengatur lingkungan tes ke 'node'
   testEnvironment: 'node',

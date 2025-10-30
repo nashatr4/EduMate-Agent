@@ -9,7 +9,7 @@ const openai = new OpenAI({
     apiKey: process.env.OPENAI_API_KEY
 });
 
-// SYSTEM_PROMPT kamu
+// SYSTEM_PROMPT
 const SYSTEM_PROMPT = `Kamu adalah "EduMate", asisten belajar mahasiswa yang cerdas dan ramah. 
 Tugasmu adalah:
 1. Menjelaskan konsep kuliah yang sulit dengan bahasa sederhana dan analogi.
