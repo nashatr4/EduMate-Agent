@@ -6,7 +6,7 @@
 
 ## ✨ Fitur Utama
 
-* **Memori Persisten:** Menggunakan **MongoDB** untuk menyimpan riwayat percakapan. Agent ini mampu mengingat konteks dari obrolan sebelumnya (`"siapa nama saya?"`).
+* **Memori Persisten:** Menggunakan **MongoDB** untuk menyimpan riwayat percakapan. Agent ini mampu mengingat konteks dari obrolan sebelumnya.
 
 * **Pemrosesan PDF (RAG):** Pengguna dapat mengunggah file PDF. Agent akan mem-parsing teksnya dan menggunakan konten tersebut sebagai konteks untuk menjawab pertanyaan berikutnya.
 
