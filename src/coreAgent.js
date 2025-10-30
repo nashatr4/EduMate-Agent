@@ -1,7 +1,8 @@
 // src/coreAgent.js
 const { OpenAI } = require('openai');
-const memory = require('./memory'); 
-const pdfReader = require('./services/pdfReader'); 
+const memory = require('./memory'); // Versi Mongoose (async)
+const pdf = require('pdf-parse'); // Versi 1.1.1 (CJS)
+const axios = require('axios'); // Untuk memanggil API eksternal
 
 // Inisialisasi OpenAI (mengambil dari .env)
 const openai = new OpenAI({
@@ -13,9 +14,90 @@ const SYSTEM_PROMPT = `Kamu adalah "EduMate", asisten belajar mahasiswa yang cer
 Tugasmu adalah:
 1. Menjelaskan konsep kuliah yang sulit dengan bahasa sederhana dan analogi.
 2. Memberikan contoh soal dan jawaban jika diminta.
-3. Jika pengguna bilang "jelaskan lagi" atau "lebih mudah", gunakan analogi yang berbeda.
-4. Jaga jawaban agar tetap ringkas dan fokus pada materi akademik. Tolak membahas topik di luar edukasi dengan sopan.
-5. Jika pengguna memberikanmu teks dari sebuah dokumen (biasanya ditandai dengan [AWAL DOKUMEN]), tugas utamamu adalah menjawab pertanyaan pengguna HANYA berdasarkan informasi dari dokumen tersebut. Jelaskan, ringkas, atau terjemahkan sesuai permintaan.`;
+3. Jaga jawaban agar tetap ringkas dan fokus pada materi akademik.
+4. Jika pengguna memberikanmu file (dokumen atau gambar), jawab pertanyaan HANYA berdasarkan file itu.
+5. Kamu punya alat "cari_jurnal_akademik" untuk mencari paper/jurnal sungguhan dari internet. Saat menyajikan hasil, format dengan jelas: Judul, Penulis, Tahun, dan Link.
+6. PENTING: Jika kamu memberikan link jurnal, prioritas utamamu adalah link PDF (jika tersedia), baru link halaman web jika PDF tidak ada.`;
+
+
+// --- FUNGSI PENCARIAN JURNAL (DIPERBAIKI UNTUK LINK PDF) ---
+async function runJournalSearch(query) {
+    console.log(`[Tool] Menjalankan pencarian jurnal untuk: "${query}"`);
+    
+    // Nanti, aktifkan ini lagi jika API key sudah dapat
+    // const apiKey = process.env.SEMANTIC_SCHOLAR_API_KEY;
+    // if (!apiKey) { ... }
+
+    try {
+        const response = await axios.get('https://api.semanticscholar.org/graph/v1/paper/search', {
+            params: {
+                query: query,
+                limit: 5, // Ambil 5 jurnal teratas
+                // --- ⬇️ PERUBAHAN DI SINI ⬇️ ---
+                fields: 'title,authors,abstract,url,year,openAccessPdf' // Minta field PDF
+            }
+            // Hapus komen 'headers' ini jika API key sudah ada
+            // headers: { 'x-api-key': apiKey } 
+        });
+        
+        const papers = response.data.data || [];
+
+        // --- ⬇️ PROSES HASILNYA AGAR LEBIH BERSIH ⬇️ ---
+        const cleanResults = papers.map(paper => {
+            // Logika baru untuk memilih link:
+            // 1. Coba cari 'openAccessPdf.url' (link PDF langsung)
+            // 2. Jika tidak ada, baru pakai 'url' (link halaman detail)
+            const link = (paper.openAccessPdf && paper.openAccessPdf.url) 
+                         ? paper.openAccessPdf.url 
+                         : paper.url;
+
+            return {
+                title: paper.title,
+                authors: paper.authors ? paper.authors.map(a => a.name).join(', ') : 'No authors listed',
+                year: paper.year,
+                abstract: paper.abstract ? paper.abstract.substring(0, 200) + '...' : 'No abstract available.', // Ringkas abstrak
+                link: link // Gunakan link yang sudah kita pilih
+            };
+        });
+        // --- ⬆️ AKHIR PERUBAHAN ⬆️ ---
+
+        console.log('[Tool] Berhasil mengambil & memproses data dari Semantic Scholar.');
+        // Kembalikan data yang sudah bersih
+        return JSON.stringify(cleanResults); 
+
+    } catch (error) {
+        if (error.response && error.response.status === 429) {
+            console.warn('[Tool Error] Kena Rate Limit (429)! Coba lagi lebih pelan.');
+            return JSON.stringify({ error: "Server pencarian sedang sibuk, coba lagi dalam beberapa detik." });
+        }
+        console.error(`[Tool Error] Gagal memanggil Semantic Scholar: ${error.message}`);
+        return JSON.stringify({ error: `Gagal mengambil data: ${error.message}` });
+    }
+}
+// --- AKHIR FUNGSI PENCARIAN JURNAL ---
+
+
+// --- DEFINISI ALAT (TOOLS) UNTUK OPENAI ---
+const tools = [
+    {
+        type: "function",
+        function: {
+            name: "cari_jurnal_akademik",
+            description: "Mencari jurnal atau paper akademik dari internet berdasarkan kata kunci.",
+            parameters: {
+                type: "object",
+                properties: {
+                    query: {
+                        type: "string",
+                        description: "Kata kunci pencarian, misal 'manajemen industri' atau 'dampak AI pada manufaktur'",
+                    },
+                },
+                required: ["query"],
+            },
+        },
+    }
+];
+// --- AKHIR DEFINISI ALAT ---
 
 
 async function handleMessage(msgOrUserId, userMessageString) {
@@ -24,51 +106,60 @@ async function handleMessage(msgOrUserId, userMessageString) {
     let userMessage = '';
     let isWhatsApp = false;
     let whatsAppMsgObject = null;
+    
     let storedPdfText = ''; 
+    let storedImage = null;
 
     if (typeof msgOrUserId === 'object' && msgOrUserId !== null && msgOrUserId.from) {
         // --- FORMAT 1: INPUT DARI WHATSAPP ---
         isWhatsApp = true;
         whatsAppMsgObject = msgOrUserId; 
         userId = whatsAppMsgObject.from;
-        userMessage = whatsAppMsgObject.body || '';
+        userMessage = whatsAppMsgObject.body || ''; 
+        
+        storedPdfText = await memory.getPdfText(userId); 
+        storedImage = await memory.getImage(userId);
 
-        storedPdfText = await memory.getPdfText(userId);
-
-        // // Cetak log debug (bisa kamu hapus nanti jika sudah normal)
-        // console.log('[Agent Debug] MENERIMA OBJEK PESAN MENTAH DARI WA:');
-        // console.log(JSON.stringify(whatsAppMsgObject, null, 2));
-
-
-        // --- LOGIKA PDF DIPERBAIKI ---
-        // Kita cek '._data.mimetype' bukan 'mimetype'
-        if (whatsAppMsgObject.hasMedia && 
-            whatsAppMsgObject.type === 'document' && 
-            whatsAppMsgObject._data.mimetype === 'application/pdf') {
-            
-            console.log(`[Agent] PDF DITEMUKAN! (Caption: "${userMessage}") dari ${userId}...`);
-            try {
-                await whatsAppMsgObject.reply('📄 PDF diterima. Sedang memproses isinya...');
-                
-                // handlePdfUpload juga async, jadi perlu di-await
-                const newPdfText = await handlePdfUpload(whatsAppMsgObject, userId);
-                storedPdfText = newPdfText; 
-                
-                await whatsAppMsgObject.reply('✅ Dokumen berhasil dibaca!');
-            
-            } catch (pdfError) {
-                console.error(`❌ [Agent] Gagal memproses PDF: ${pdfError.message}`);
-                await whatsAppMsgObject.reply('Maaf, saya gagal membaca file PDF itu. Coba kirim ulang.');
-                return; 
-            }
-        }
+        // --- LOGIKA DETEKSI FILE (PDF ATAU GAMBAR) ---
+        if (whatsAppMsgObject.hasMedia && whatsAppMsgObject.type === 'document' && whatsAppMsgObject._data.mimetype === 'application/pdf') {
+            console.log(`[Agent] PDF DITEMUKAN! (Caption: "${userMessage}") dari ${userId}...`);
+            try {
+                await whatsAppMsgObject.reply('📄 PDF diterima. Sedang memproses isinya...');
+                const newPdfText = await handlePdfUpload(whatsAppMsgObject, userId);
+                storedPdfText = newPdfText; 
+                storedImage = null; 
+                await whatsAppMsgObject.reply('✅ Dokumen PDF berhasil dibaca!');
+            } catch (pdfError) {
+                console.error(`❌ [Agent] Gagal memproses PDF: ${pdfError.message}`);
+                await whatsAppMsgObject.reply('Maaf, saya gagal membaca file PDF itu. Coba kirim ulang.');
+                return; 
+            }
+        
+        } else if (whatsAppMsgObject.hasMedia && (whatsAppMsgObject._data.mimetype === 'image/jpeg' || whatsAppMsgObject._data.mimetype === 'image/png' || whatsAppMsgObject._data.mimetype === 'image/webp')) {
+            console.log(`[Agent] GAMBAR DITEMUKAN! (Caption: "${userMessage}") dari ${userId}...`);
+            try {
+                await whatsAppMsgObject.reply('🖼️ Gambar diterima. Sedang memproses...');
+                const media = await whatsAppMsgObject.downloadMedia();
+                if (!media) throw new Error('Gagal mengunduh media.');
+                
+                await memory.saveImage(userId, media.mimetype, media.data);
+                storedImage = await memory.getImage(userId); 
+                storedPdfText = null; 
+                await whatsAppMsgObject.reply('✅ Gambar berhasil diterima!');
+            } catch (imgError) {
+                console.error(`❌ [Agent] Gagal memproses Gambar: ${imgError.message}`);
+                await whatsAppMsgObject.reply('Maaf, saya gagal memproses gambar itu. Coba kirim ulang.');
+                return;
+            }
+        }
 
     } else if (typeof msgOrUserId === 'string' && typeof userMessageString === 'string') {
         // --- FORMAT 2: INPUT DARI CLI ---
         isWhatsApp = false;
         userId = msgOrUserId;
         userMessage = userMessageString;
-        storedPdfText = memory.getPdfText(userId); 
+        storedPdfText = await memory.getPdfText(userId);
+        storedImage = await memory.getImage(userId); 
     } else {
         console.error('Format handleMessage tidak dikenal:', msgOrUserId);
         return "Error: Format input tidak dikenal.";
@@ -76,24 +167,20 @@ async function handleMessage(msgOrUserId, userMessageString) {
 
     // Cek perintah /reset
     if (userMessage.toLowerCase().trim() === '/reset') {
-        memory.resetHistory(userId);
+        await memory.resetHistory(userId);
         console.log(`[Agent] Memori untuk ${userId} telah direset.`);
-        return 'Memori percakapan dan PDF telah direset. Kita mulai dari awal ya!';
+        return 'Memori percakapan dan sesi telah direset. Kita mulai dari awal ya!';
     }
     
-    // Jika pesan teks kosong (misal user HANYA kirim PDF tanpa caption),
-    // jangan panggil OpenAI.
     if (userMessage.trim() === '') {
         console.log(`[Agent] Pesan teks kosong. Tidak ada balasan.`);
-        return; // Mengembalikan 'undefined'
+        return; 
     }
 
-    // === PROSES PESAN TEKS ===
+    // === PROSES PESAN TEKS (DENGAN LOGIKA TOOLS & VISION) ===
     console.log(`[Agent] Memproses teks dari ${userId}: "${userMessage}"`);
 
     try {
-        // if (isWhatsApp) whatsAppMsgObject.react('⏳'); // <-- BARIS INI DIMATIKAN (Penyebab Crash)
-
         const chatHistory = await memory.getHistory(userId);
 
         let messages = [
@@ -101,47 +188,95 @@ async function handleMessage(msgOrUserId, userMessageString) {
             ...chatHistory 
         ];
 
-        let userPromptForThisTurn = '';
+        let userPromptForThisTurn = userMessage; 
+
         if (storedPdfText) {
-            // Jika ada PDF (baik dari memori atau yg baru diupload)
             console.log(`[Agent] Menjawab ${userId} dengan konteks PDF.`);
             userPromptForThisTurn = `
-            Berikut adalah isi dokumen yang saya berikan:
-            ---[ AWAL DOKUMEN ]---
-            ${storedPdfText}
-            ---[ AKHIR DOKUMEN ]---
+            Konteks Dokumen: ---[ ${storedPdfText.substring(0, 3000)}... ]---
+            Pertanyaan: "${userMessage}"`;
+            messages.push({ role: 'user', content: userPromptForThisTurn });
 
-            Berdasarkan dokumen di atas, tolong jawab pertanyaan saya: 
-            "${userMessage}"
-            `;
+        } else if (storedImage) {
+            console.log(`[Agent] Menjawab ${userId} dengan konteks GAMBAR.`);
+            messages.push({
+                role: 'user',
+                content: [
+                    { type: 'text', text: userPromptForThisTurn },
+                    {
+                        type: 'image_url',
+                        image_url: { "url": `data:${storedImage.mimetype};base64,${storedImage.data}` }
+                    }
+                ]
+            });
+            await memory.clearImage(userId);
         } else {
-            // PDF tidak ada, user cuma tanya
-            console.log(`[Agent] Menjawab ${userId} tanpa konteks PDF.`);
-            userPromptForThisTurn = userMessage;
+            console.log(`[Agent] Menjawab ${userId} tanpa konteks file.`);
+            messages.push({ role: 'user', content: userPromptForThisTurn });
         }
         
-        messages.push({ role: 'user', content: userPromptForThisTurn });
-        
+        // --- PANGGILAN OPENAI KE-1 (Untuk Cek Tools) ---
+        console.log('[Agent] Memanggil OpenAI (Panggilan ke-1)...');
         const completion = await openai.chat.completions.create({
-            model: 'gpt-4o-mini',
+            model: 'gpt-4o-mini', 
             messages: messages,
-            max_tokens: 1500
+            tools: tools,
+            tool_choice: "auto",
         });
 
-        const aiResponse = completion.choices[0].message.content;
+        const responseMessage = completion.choices[0].message;
+        const toolCalls = responseMessage.tool_calls;
+
+        if (toolCalls) {
+            console.log('[Agent] AI meminta pemanggilan alat...');
+            messages.push(responseMessage); 
+
+            for (const toolCall of toolCalls) {
+                const functionName = toolCall.function.name;
+                const functionArgs = JSON.parse(toolCall.function.arguments);
+                
+                let functionResponse = '';
+
+                if (functionName === 'cari_jurnal_akademik') {
+                    // Ini akan memanggil 'runJournalSearch' yang sudah diperbarui
+                    functionResponse = await runJournalSearch(functionArgs.query);
+                } else {
+                    console.warn(`[Agent] Alat tidak dikenal: ${functionName}`);
+                    functionResponse = JSON.stringify({ error: "Alat tidak dikenal." });
+                }
+                messages.push({
+                    tool_call_id: toolCall.id,
+                    role: "tool",
+                    name: functionName,
+                    content: functionResponse,
+                });
+            }
+
+            // --- PANGGILAN OPENAI KE-2 (Dengan Hasil Alat) ---
+            console.log('[Agent] Memanggil OpenAI (Panggilan ke-2) dengan hasil alat...');
+            const finalCompletion = await openai.chat.completions.create({
+                model: 'gpt-4o-mini',
+                messages: messages,
+            });
+
+            const finalResponse = finalCompletion.choices[0].message.content;
+            
+            await memory.saveMessage(userId, 'user', userMessage); 
+            await memory.saveMessage(userId, 'assistant', finalResponse);
+            return finalResponse;
         
-        memory.saveMessage(userId, 'user', userMessage); 
-        memory.saveMessage(userId, 'assistant', aiResponse);
-
-        // if (isWhatsApp) whatsAppMsgObject.react(''); // <-- BARIS INI DIMATIKAN
-
-        return aiResponse; 
+        } else {
+            // --- ALUR NORMAL (Tidak ada alat yang dipanggil) ---
+            console.log('[Agent] AI merespons langsung.');
+            const aiResponse = responseMessage.content;
+            
+            await memory.saveMessage(userId, 'user', userMessage); 
+            await memory.saveMessage(userId, 'assistant', aiResponse);
+            return aiResponse; 
+        }
 
     } catch (apiError) {
         console.error(`❌ [Agent] Error dari OpenAI API: ${apiError.message}`);
-        
-        // if (isWhatsApp) whatsAppMsgObject.react('❌'); // <-- BARIS INI DIMATIKAN
-        
         if (apiError.code === 'missing_key') {
              return 'Error: API Key OpenAI tidak ditemukan. Cek file .env kamu.';
         }
@@ -149,28 +284,27 @@ async function handleMessage(msgOrUserId, userMessageString) {
     }
 }
 
-/**
- * Fungsi ini HANYA memproses PDF, menyimpannya, dan MENGEMBALIKAN teksnya.
- */
+
 async function handlePdfUpload(msg, userId) {
     try {
         const media = await msg.downloadMedia();
         if (!media) throw new Error('Gagal mengunduh media.');
         
-        // 'require' versi CJS yang stabil
-        const pdf = require('pdf-parse'); 
         const pdfBuffer = Buffer.from(media.data, 'base64');
-        const data = await pdf(pdfBuffer); // Seharusnya 'pdf' sudah menjadi fungsi
+        const data = await pdf(pdfBuffer); 
 
         if (!data || !data.text) {
              throw new Error('Gagal mengekstrak teks, file mungkin hanya berisi gambar.');
         }
         const pdfText = data.text;
 
-        memory.savePdfText(userId, pdfText);
+        await memory.savePdfText(userId, pdfText);
         console.log(`[Agent] PDF untuk ${userId} berhasil diproses (${pdfText.length} karakter).`);
         
-        memory.resetHistory(userId); 
+        // Hapus riwayat chat
+        const User = require('./models/User');
+        await User.updateOne({ userId: userId }, { $set: { history: [] } }); 
+        
         console.log(`[Agent] Riwayat percakapan lama untuk ${userId} dihapus karena ada PDF baru.`);
         
         return pdfText;

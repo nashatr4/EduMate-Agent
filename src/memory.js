@@ -1,105 +1,123 @@
 // src/memory.js
-const User = require('./models/user');
-const MAX_HISTORY_PER_USER = 5; // Menyimpan 5 pasang percakapan
+const User = require('./models/User'); // Impor schema User barumu
 
-async function findOrCreateUser(userId) {
-    let user = await User.findOne({ userId });
+const MAX_HISTORY_PER_USER = 5; // Batas riwayat percakapan
+
+// --- SEMUA FUNGSI SEKARANG ASYNC & PAKAI SATU MODEL 'User' ---
+
+/**
+ * Mendapatkan data user, atau membuat user baru jika tidak ada.
+ * Ini adalah fungsi helper internal yang efisien.
+ */
+async function getOrCreateUser(userId) {
+    let user = await User.findOne({ userId: userId });
     if (!user) {
-        user = await User.create({ userId });
+        user = await User.create({ userId: userId, history: [] });
     }
     return user;
 }
 
 async function saveMessage(userId, role, content) {
     try {
-        const newMessage = { role, content };
-
-        await User.updateOne(
-            { userId },
+        // Gunakan $push untuk menambah pesan baru ke array 'history'
+        // Gunakan $slice untuk memotong array, hanya simpan 5 terakhir
+        await User.findOneAndUpdate(
+            { userId: userId },
             {
                 $push: {
                     history: {
-                        $each: [newMessage],
-                        // $slice: -N akan menyimpan N pesan TERAKHIR.
-                        $slice: -MAX_HISTORY_PER_USER 
+                        $each: [{ role, content, timestamp: new Date() }],
+                        $slice: -MAX_HISTORY_PER_USER // Simpan 5 elemen terakhir
                     }
                 }
             },
-            { upsert: true } // Buat pengguna baru jika belum ada
+            { upsert: true } // Buat user baru jika belum ada
         );
-        
-        console.log(`[Memory] Riwayat percakapan untuk ${userId} disimpan di DB.`);
+        console.log(`[DB-Mongo] Riwayat percakapan untuk ${userId} disimpan.`);
     } catch (error) {
-        console.error(`[Memory] Gagal saveMessage untuk ${userId}: ${error.message}`);
+        console.error(`[DB-Mongo] Gagal menyimpan pesan: ${error.message}`);
     }
 }
 
 async function getHistory(userId) {
     try {
-        const user = await User.findOne({ userId });
-        if (user) {
-            return user.history;
+        const user = await User.findOne({ userId: userId }).select('history -_id');
+        if (user && user.history) {
+            // 'history' sudah otomatis terpotong 5 terakhir berkat 'saveMessage'
+            return user.history.map(msg => ({ role: msg.role, content: msg.content }));
         }
-        return []; // Kembalikan array kosong jika user tidak ada
+        return [];
     } catch (error) {
-        console.error(`[Memory] Gagal getHistory untuk ${userId}: ${error.message}`);
+        console.error(`[DB-Mongo] Gagal mengambil riwayat: ${error.message}`);
         return [];
     }
 }
 
+// 'findOneAndUpdate' dengan 'upsert: true' sangat efisien
 async function savePdfText(userId, text) {
-    try {
-        await User.updateOne(
-            { userId },
-            { $set: { pdfText: text } },
-            { upsert: true } // Buat pengguna baru jika belum ada
-        );
-        console.log(`[Memory] Teks PDF disimpan di DB untuk ${userId}`);
-    } catch (error) {
-        console.error(`[Memory] Gagal savePdfText untuk ${userId}: ${error.message}`);
-    }
+    const sessionData = { 
+        pdfText: text, 
+        imageMime: '', // Hapus gambar lama
+        imageData: ''
+    };
+    await User.findOneAndUpdate(
+        { userId: userId }, // Kunci pencarian
+        { $set: sessionData }, // Set data baru
+        { upsert: true } // Buat baru jika tidak ditemukan
+    );
+    console.log(`[DB-Mongo] Teks PDF disimpan untuk ${userId}`);
 }
 
-
-// --- LOGIKA PDF DITAMBAHKAN (UNTUK MENYIMPAN TEKS PDF) ---
-const userPdfSessions = new Map();
-
+async function saveImage(userId, mimetype, data) {
+    const sessionData = { 
+        pdfText: '', // Hapus PDF lama
+        imageMime: mimetype, 
+        imageData: data 
+    };
+    await User.findOneAndUpdate(
+        { userId: userId }, 
+        { $set: sessionData }, 
+        { upsert: true }
+    );
+    console.log(`[DB-Mongo] Gambar disimpan untuk ${userId}`);
+}
 
 async function getPdfText(userId) {
-    try {
-        const user = await User.findOne({ userId });
-        if (user && user.pdfText) {
-            console.log(`[Memory] Teks PDF diambil dari DB untuk ${userId}`);
-            return user.pdfText;
-        }
-        return undefined; // Kembalikan undefined (seperti Map.get) jika tidak ada
-    } catch (error) {
-        console.error(`[Memory] Gagal getPdfText untuk ${userId}: ${error.message}`);
-        return undefined;
-    }
+    const user = await getOrCreateUser(userId);
+    return user.pdfText || null;
 }
-// --- AKHIR LOGIKA PDF ---
 
+async function getImage(userId) {
+    const user = await getOrCreateUser(userId);
+    if (user && user.imageMime && user.imageData) {
+        return { mimetype: user.imageMime, data: user.imageData };
+    }
+    return null;
+}
 
-// --- FUNGSI RESET DIGABUNGKAN ---
+async function clearImage(userId) {
+    await User.updateOne(
+        { userId: userId }, 
+        { $set: { imageMime: '', imageData: '' } }
+    );
+}
+
 async function resetHistory(userId) {
-    try {
-        await User.updateOne(
-            { userId },
-            { $set: { history: [], pdfText: '' } }
-            // Kita tidak pakai upsert, karena tidak ada gunanya mereset user yg tidak ada
-        );
-        console.log(`[Memory] Memori (percakapan & PDF) direset di DB untuk ${userId}`);
-    } catch (error) {
-        console.error(`[Memory] Gagal resetHistory untuk ${userId}: ${error.message}`);
-    }
+    // Reset semua data, tapi jangan hapus user-nya
+    await User.updateOne(
+        { userId: userId },
+        { $set: { history: [], pdfText: '', imageMime: '', imageData: '' } }
+    );
+    console.log(`[DB-Mongo] Memori (percakapan & sesi) dihapus untuk ${userId}`);
 }
 
-// Ekspor semua fungsi
 module.exports = { 
     saveMessage, 
     getHistory, 
     resetHistory,
     savePdfText,
-    getPdfText
+    saveImage,
+    getPdfText,
+    getImage,
+    clearImage
 };
