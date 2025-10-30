@@ -26,10 +26,10 @@ Berikut adalah contoh alur penggunaan bot, mulai dari proses login hingga percak
 
 
 3.  **Contoh Alur Percakapan**
-    Contoh percakapan yang menunjukkan respons kontekstual, rekomendasi psikolog berdasarkan lokasi, dan *safety net* (nomor telepon darurat) ketika pengguna memasukkan kata kritis.
+    Contoh percakapan yang menunjukkan respons dari file berupa pdf, gambar, pencarian jurnal, serta longterm memory.
     <br> [video demo](https://drive.google.com/file/d/1Zk3pyYTgMhbE3CgHik4KuwdyZ3RP0woN/view?usp=sharing)
-    | Respons Kontekstual | Menampilkan Psikolog Terdekat | *Safety net* |
-    | :---: | :---: | :---: |
+    | PDF | Gambar | Pencarian Jurnal | *long Term Memory* | 
+    | :---: | :---: | :---: | :---: |
     | <img src="https://github.com/user-attachments/assets/2ee22113-4c32-424d-91c7-b9ef7eb02121" width="180"> | <img src="https://github.com/user-attachments/assets/ed44d13c-41bd-41ca-83b7-e981a26304a1" width="180"> | <img src="https://github.com/user-attachments/assets/82b6cfb5-2c29-4371-ad17-bcad46708289" width="180">
     
 
