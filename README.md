@@ -26,7 +26,7 @@ Berikut adalah contoh alur penggunaan bot, mulai dari proses login hingga percak
 
 2.  **Contoh Alur Percakapan**  
     Contoh percakapan yang menunjukkan respons dari file berupa PDF, gambar, pencarian jurnal, serta *long-term memory*.  
-    <br>[🎥 Video Demo](https://drive.google.com/file/d/1Zk3pyYTgMhbE3CgHik4KuwdyZ3RP0woN/view?usp=sharing)
+    <br>[🎥 Video Demo](https://youtu.be/2VqG8moouBE)
 
     | PDF | Gambar | Pencarian Jurnal | *Long Term Memory* | 
     | :---: | :---: | :---: | :---: |
@@ -52,7 +52,7 @@ Berikut adalah langkah-langkah untuk menjalankan bot ini di komputermu.
 1.  **Clone Repositori**
     ```bash
     git clone https://github.com/nashatr4/EduMate-Agent
-    cd NLP_Project_1
+    cd EduMate-Agent
     ```
 
 2.  **Install Dependencies**
