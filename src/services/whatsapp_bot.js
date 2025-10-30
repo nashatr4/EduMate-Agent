@@ -1,13 +1,13 @@
-// src/whatsapp_bot.js
+// src/services/whatsapp_bot.js
 
 const { Client, LocalAuth } = require('whatsapp-web.js');
 const qrcode = require('qrcode-terminal');
-const { handleMessage } = require('./coreAgent'); // Impor 'otak'-nya
+const { handleMessage } = require('../coreAgent'); 
 
 const client = new Client({
     authStrategy: new LocalAuth({
         // Tentukan folder untuk menyimpan cache sesi
-        dataPath: 'wwebjs_cache' 
+        dataPath: '.wwebjs_cache' 
     }),
     puppeteer: {
         args: ['--no-sandbox', '--disable-setuid-sandbox'],
@@ -42,21 +42,14 @@ async function initialize() {
             if (msg.from === 'status@broadcast' || msg.isStatus) {
                 return;
             }
-            
-            // --- INI PERBAIKANNYA ---
-            
-            // 1. Panggil 'otak'-nya dan TANGKAP balasannya
+
             // 'handleMessage' akan mengembalikan balasan (string) atau undefined (jika PDF)
             const replyText = await handleMessage(msg); 
 
             // 2. Kirim balasan JIKA 'replyText' ada isinya
-            // (Saat kamu upload PDF, 'handleMessage' akan mengurus balasannya sendiri
-            // dan mengembalikan 'undefined', jadi 'if' ini tidak akan jalan,
-            // yang mana itu sudah benar)
             if (replyText) {
                 await msg.reply(replyText);
             }
-            // --- AKHIR PERBAIKAN ---
 
         } catch (error) {
             console.error(`❌ [WhatsApp] Gagal memproses pesan: ${error.message}`);

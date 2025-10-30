@@ -1,4 +1,4 @@
-// src/pdfReader.js
+// src/services/pdfReader.js
 
 // 'require' sekarang akan 100% berfungsi karena kita pakai versi 1.1.1
 const pdf = require('pdf-parse');

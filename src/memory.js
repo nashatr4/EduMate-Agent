@@ -1,51 +1,98 @@
-// --- DARI KODE ANDA (UNTUK RIWAYAT PERCAKAPAN) ---
-const conversationHistory = new Map();
+// src/memory.js
+const User = require('./models/user');
 const MAX_HISTORY_PER_USER = 5; // Menyimpan 5 pasang percakapan
 
-function saveMessage(userId, role, content) {
-  let userHistory = conversationHistory.get(userId) || [];
-  userHistory.push({ role, content });
-
-  // Logika Anda: 5 pesan (bukan 5 pasang)
-  // Jika ingin 5 pasang (10 pesan), ganti ke MAX_HISTORY_PER_USER * 2
-  while (userHistory.length > MAX_HISTORY_PER_USER) { 
-    userHistory.shift(); // Hapus pesan paling lama
-  }
-  conversationHistory.set(userId, userHistory);
-  console.log(`[Memory] Riwayat percakapan untuk ${userId} disimpan.`);
+async function findOrCreateUser(userId) {
+    let user = await User.findOne({ userId });
+    if (!user) {
+        user = await User.create({ userId });
+    }
+    return user;
 }
 
-function getHistory(userId) {
-  return conversationHistory.get(userId) || [];
+async function saveMessage(userId, role, content) {
+    try {
+        const newMessage = { role, content };
+
+        await User.updateOne(
+            { userId },
+            {
+                $push: {
+                    history: {
+                        $each: [newMessage],
+                        // $slice: -N akan menyimpan N pesan TERAKHIR.
+                        $slice: -MAX_HISTORY_PER_USER 
+                    }
+                }
+            },
+            { upsert: true } // Buat pengguna baru jika belum ada
+        );
+        
+        console.log(`[Memory] Riwayat percakapan untuk ${userId} disimpan di DB.`);
+    } catch (error) {
+        console.error(`[Memory] Gagal saveMessage untuk ${userId}: ${error.message}`);
+    }
 }
-// --- AKHIR DARI KODE ANDA ---
+
+async function getHistory(userId) {
+    try {
+        const user = await User.findOne({ userId });
+        if (user) {
+            return user.history;
+        }
+        return []; // Kembalikan array kosong jika user tidak ada
+    } catch (error) {
+        console.error(`[Memory] Gagal getHistory untuk ${userId}: ${error.message}`);
+        return [];
+    }
+}
+
+async function savePdfText(userId, text) {
+    try {
+        await User.updateOne(
+            { userId },
+            { $set: { pdfText: text } },
+            { upsert: true } // Buat pengguna baru jika belum ada
+        );
+        console.log(`[Memory] Teks PDF disimpan di DB untuk ${userId}`);
+    } catch (error) {
+        console.error(`[Memory] Gagal savePdfText untuk ${userId}: ${error.message}`);
+    }
+}
 
 
 // --- LOGIKA PDF DITAMBAHKAN (UNTUK MENYIMPAN TEKS PDF) ---
 const userPdfSessions = new Map();
 
-function savePdfText(userId, text) {
-    userPdfSessions.set(userId, text);
-    console.log(`[Memory] Teks PDF disimpan untuk ${userId}`);
-}
 
-function getPdfText(userId) {
-    const text = userPdfSessions.get(userId);
-    if (text) {
-        console.log(`[Memory] Teks PDF diambil untuk ${userId}`);
+async function getPdfText(userId) {
+    try {
+        const user = await User.findOne({ userId });
+        if (user && user.pdfText) {
+            console.log(`[Memory] Teks PDF diambil dari DB untuk ${userId}`);
+            return user.pdfText;
+        }
+        return undefined; // Kembalikan undefined (seperti Map.get) jika tidak ada
+    } catch (error) {
+        console.error(`[Memory] Gagal getPdfText untuk ${userId}: ${error.message}`);
+        return undefined;
     }
-    return text;
 }
 // --- AKHIR LOGIKA PDF ---
 
 
 // --- FUNGSI RESET DIGABUNGKAN ---
-function resetHistory(userId) {
-  // Hapus riwayat percakapan
-  conversationHistory.delete(userId);
-  // Hapus juga PDF yang tersimpan
-  userPdfSessions.delete(userId); 
-  console.log(`[Memory] Memori (percakapan & PDF) dihapus untuk ${userId}`);
+async function resetHistory(userId) {
+    try {
+        await User.updateOne(
+            { userId },
+            { $set: { history: [], pdfText: '' } }
+            // Kita tidak pakai upsert, karena tidak ada gunanya mereset user yg tidak ada
+        );
+        console.log(`[Memory] Memori (percakapan & PDF) direset di DB untuk ${userId}`);
+    } catch (error) {
+        console.error(`[Memory] Gagal resetHistory untuk ${userId}: ${error.message}`);
+    }
 }
 
 // Ekspor semua fungsi
@@ -53,6 +100,6 @@ module.exports = {
     saveMessage, 
     getHistory, 
     resetHistory,
-    savePdfText,  // <- Ditambahkan
-    getPdfText    // <- Ditambahkan
+    savePdfText,
+    getPdfText
 };

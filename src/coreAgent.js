@@ -1,6 +1,7 @@
+// src/coreAgent.js
 const { OpenAI } = require('openai');
 const memory = require('./memory'); 
-const pdfReader = require('./pdfReader'); 
+const pdfReader = require('./services/pdfReader'); 
 
 // Inisialisasi OpenAI (mengambil dari .env)
 const openai = new OpenAI({
@@ -30,8 +31,9 @@ async function handleMessage(msgOrUserId, userMessageString) {
         isWhatsApp = true;
         whatsAppMsgObject = msgOrUserId; 
         userId = whatsAppMsgObject.from;
-        userMessage = whatsAppMsgObject.body || ''; 
-        storedPdfText = memory.getPdfText(userId); 
+        userMessage = whatsAppMsgObject.body || '';
+
+        storedPdfText = await memory.getPdfText(userId);
 
         // // Cetak log debug (bisa kamu hapus nanti jika sudah normal)
         // console.log('[Agent Debug] MENERIMA OBJEK PESAN MENTAH DARI WA:');
@@ -41,25 +43,25 @@ async function handleMessage(msgOrUserId, userMessageString) {
         // --- LOGIKA PDF DIPERBAIKI ---
         // Kita cek '._data.mimetype' bukan 'mimetype'
         if (whatsAppMsgObject.hasMedia && 
-            whatsAppMsgObject.type === 'document' && 
-            whatsAppMsgObject._data.mimetype === 'application/pdf') {
-            
-            console.log(`[Agent] PDF DITEMUKAN! (Caption: "${userMessage}") dari ${userId}...`);
-            try {
-                await whatsAppMsgObject.reply('📄 PDF diterima. Sedang memproses isinya...');
-                
-                const newPdfText = await handlePdfUpload(whatsAppMsgObject, userId);
-                storedPdfText = newPdfText; // Simpan teks PDF untuk giliran ini
-                
-                await whatsAppMsgObject.reply('✅ Dokumen berhasil dibaca!');
-            
-            } catch (pdfError) {
-                console.error(`❌ [Agent] Gagal memproses PDF: ${pdfError.message}`);
-                await whatsAppMsgObject.reply('Maaf, saya gagal membaca file PDF itu. Coba kirim ulang.');
-                return; // Hentikan jika PDF gagal dibaca
-            }
-            // Lanjut ke pemrosesan teks (untuk caption)
-        }
+            whatsAppMsgObject.type === 'document' && 
+            whatsAppMsgObject._data.mimetype === 'application/pdf') {
+            
+            console.log(`[Agent] PDF DITEMUKAN! (Caption: "${userMessage}") dari ${userId}...`);
+            try {
+                await whatsAppMsgObject.reply('📄 PDF diterima. Sedang memproses isinya...');
+                
+                // handlePdfUpload juga async, jadi perlu di-await
+                const newPdfText = await handlePdfUpload(whatsAppMsgObject, userId);
+                storedPdfText = newPdfText; 
+                
+                await whatsAppMsgObject.reply('✅ Dokumen berhasil dibaca!');
+            
+            } catch (pdfError) {
+                console.error(`❌ [Agent] Gagal memproses PDF: ${pdfError.message}`);
+                await whatsAppMsgObject.reply('Maaf, saya gagal membaca file PDF itu. Coba kirim ulang.');
+                return; 
+            }
+        }
 
     } else if (typeof msgOrUserId === 'string' && typeof userMessageString === 'string') {
         // --- FORMAT 2: INPUT DARI CLI ---
@@ -92,7 +94,7 @@ async function handleMessage(msgOrUserId, userMessageString) {
     try {
         // if (isWhatsApp) whatsAppMsgObject.react('⏳'); // <-- BARIS INI DIMATIKAN (Penyebab Crash)
 
-        const chatHistory = memory.getHistory(userId);
+        const chatHistory = await memory.getHistory(userId);
 
         let messages = [
             { role: 'system', content: SYSTEM_PROMPT },
