@@ -67,7 +67,6 @@ Berikut adalah langkah-langkah untuk menjalankan bot ini di komputermu.
     node_modules/
     .env
 
-    logs/
     *.log
     .wwebjs_auth
     .wwebjs_cache
